@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from routers import standings
+from routers import standings, races
 
 app = FastAPI(title="F1 Stats and Predictions API")
 
@@ -15,6 +15,12 @@ app.include_router(
     standings.router,
     prefix="/api/standings",
     tags=["Standings"]
+)
+
+app.include_router(
+    races.router,
+    prefix="/api/races",
+    tags=["Races"]
 )
 
 
