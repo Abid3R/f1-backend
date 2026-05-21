@@ -19,12 +19,12 @@ def clean_driver_standings(data):
         constructor = item["Constructors"][0]
 
         clean_data.append({
-            "position": item["position"],
+            "position": int(item["position"]),
             "driver": driver["givenName"] + " " + driver["familyName"],
             "code": driver.get("code", ""),
             "team": constructor["name"],
-            "points": item["points"],
-            "wins": item["wins"]
+            "points": float(item["points"]),
+            "wins": int(item["wins"])
         })
 
     return clean_data
