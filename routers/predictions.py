@@ -1,9 +1,17 @@
 from fastapi import APIRouter
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from pathlib import Path
+from typing import List, Literal, Optional
 import joblib
 import pandas as pd
 import numpy as np
+
+from services.strategy_engine import (
+    StintPlan,
+    find_best_pit_window,
+    predict_qualifying_top5,
+    simulate_strategy,
+)
 
 router = APIRouter()
 
@@ -174,3 +182,70 @@ def predict_pitstop(data: PitStopInput):
         "compound":    data.compound.upper(),
         "reason":      reasons,
     }
+
+
+# ── /predict/strategy ─────────────────────────────────────────────────────────
+class StintIn(BaseModel):
+    compound: Literal["SOFT", "MEDIUM", "HARD", "INTERMEDIATE", "WET"]
+    laps: int = Field(..., ge=1, le=80)
+
+
+class StrategyInput(BaseModel):
+    base_pace: float = Field(90.0, gt=30, lt=180, description="Reference clean-air lap time (s)")
+    total_laps: int = Field(..., ge=10, le=80)
+    stints: List[StintIn] = Field(..., min_length=1, max_length=4)
+    starting_fuel_kg: float = Field(110.0, ge=20, le=130)
+    fuel_consumption_per_lap: float = Field(1.9, ge=0.5, le=4.0)
+    optimize_pit_window: bool = False
+    starting_compound: Optional[str] = None
+    second_compound: Optional[str] = None
+
+
+@router.post("/strategy")
+def predict_strategy(data: StrategyInput):
+    """
+    Simulate a full race strategy: per-lap times under tyre deg + fuel burn.
+    Optionally, return the optimal 1-stop pit window across `starting_compound`
+    → `second_compound`.
+    """
+    sim = simulate_strategy(
+        base_pace=data.base_pace,
+        total_laps=data.total_laps,
+        stints=[StintPlan(s.compound, s.laps) for s in data.stints],
+        starting_fuel_kg=data.starting_fuel_kg,
+        fuel_consumption_per_lap=data.fuel_consumption_per_lap,
+    )
+
+    optimal = None
+    if data.optimize_pit_window and data.starting_compound and data.second_compound:
+        optimal = find_best_pit_window(
+            base_pace=data.base_pace,
+            total_laps=data.total_laps,
+            starting_compound=data.starting_compound.upper(),     # type: ignore[arg-type]
+            second_compound=data.second_compound.upper(),         # type: ignore[arg-type]
+        )
+
+    return {**sim, "optimal_pit_window": optimal}
+
+
+# ── /predict/qualifying ───────────────────────────────────────────────────────
+class QualiSample(BaseModel):
+    driver_number: int
+    name: str
+    team_colour: Optional[str] = None
+    fp1_best: float = 90.0
+    fp2_best: float = 90.0
+    fp3_best: float = 90.0
+    fuel_kg: float = 0.0
+    long_run_avg: float = 0.0
+
+
+class QualifyingInput(BaseModel):
+    samples: List[QualiSample] = Field(..., min_length=2, max_length=20)
+
+
+@router.post("/qualifying")
+def predict_qualifying(data: QualifyingInput):
+    """Fuel-corrected FP1/FP2/FP3 micro-sector blend → projected top-5 grid."""
+    payload = [s.model_dump() for s in data.samples]
+    return {"top_5": predict_qualifying_top5(payload)}
